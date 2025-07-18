@@ -48,19 +48,29 @@ def get_losers():
 def get_volume(symbol):
     """Get volume data for a stock"""
     try:
-        # Get today's date
-        today = datetime.now().strftime('%Y-%m-%d')
+        # Get data from the last 5 days to ensure we have data
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=5)
         
-        url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/day/{today}/{today}?adjusted=true&sort=asc&limit=1&apiKey={POLYGON_API_KEY}"
+        url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/day/{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}?adjusted=true&sort=desc&limit=5&apiKey={POLYGON_API_KEY}"
         response = requests.get(url, timeout=15)
         
         if response.status_code == 200:
             data = response.json()
             if data.get('results'):
-                volume = data['results'][0].get('v', 0)
-                return jsonify({"symbol": symbol, "volume": volume, "date": today})
+                # Get the most recent data
+                latest = data['results'][0]
+                return jsonify({
+                    "symbol": symbol, 
+                    "volume": latest.get('v', 0),
+                    "price": latest.get('c', 0),
+                    "high": latest.get('h', 0),
+                    "low": latest.get('l', 0),
+                    "open": latest.get('o', 0),
+                    "date": datetime.fromtimestamp(latest.get('t', 0)/1000).strftime('%Y-%m-%d')
+                })
             else:
-                return jsonify({"error": "No data found"}), 404
+                return jsonify({"error": "No data found for this symbol"}), 404
         else:
             return jsonify({"error": f"Polygon API error: {response.status_code}"}), 500
             
