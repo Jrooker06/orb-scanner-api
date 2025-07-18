@@ -79,15 +79,59 @@ def get_volume(symbol):
 
 @app.route('/api/float/<symbol>', methods=['GET'])
 def get_float(symbol):
-    """Get float data from Finnhub"""
+    """Get float data from Polygon"""
     try:
-        url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={FINNHUB_API_KEY}"
+        # Use Polygon's ticker details endpoint to get float information
+        url = f"https://api.polygon.io/v3/reference/tickers/{symbol}?apiKey={POLYGON_API_KEY}"
         response = requests.get(url, timeout=15)
         
         if response.status_code == 200:
-            return jsonify(response.json())
+            data = response.json()
+            result = data.get('results', {})
+            
+            # Extract float information
+            float_info = {
+                "symbol": symbol,
+                "float": result.get('share_class_shares_outstanding', 0),
+                "market_cap": result.get('market_cap', 0),
+                "shares_outstanding": result.get('share_class_shares_outstanding', 0),
+                "company_name": result.get('name', ''),
+                "primary_exchange": result.get('primary_exchange', ''),
+                "currency": result.get('currency_name', 'USD')
+            }
+            
+            return jsonify(float_info)
         else:
-            return jsonify({"error": f"Finnhub API error: {response.status_code}"}), 500
+            return jsonify({"error": f"Polygon API error: {response.status_code}"}), 500
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/sector/<symbol>', methods=['GET'])
+def get_sector(symbol):
+    """Get sector information for a stock"""
+    try:
+        # Use Polygon's ticker details endpoint to get sector information
+        url = f"https://api.polygon.io/v3/reference/tickers/{symbol}?apiKey={POLYGON_API_KEY}"
+        response = requests.get(url, timeout=15)
+        
+        if response.status_code == 200:
+            data = response.json()
+            result = data.get('results', {})
+            
+            # Extract sector information
+            sector_info = {
+                "symbol": symbol,
+                "sector": result.get('sic_description', 'Unknown'),
+                "industry": result.get('sic_description', 'Unknown'),
+                "company_name": result.get('name', ''),
+                "primary_exchange": result.get('primary_exchange', ''),
+                "market_cap": result.get('market_cap', 0)
+            }
+            
+            return jsonify(sector_info)
+        else:
+            return jsonify({"error": f"Polygon API error: {response.status_code}"}), 500
             
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -152,37 +196,42 @@ def get_rsi(symbol):
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/macd/<symbol>', methods=['GET'])
-def calculate_macd(prices, fast=12, slow=26, signal=9):
+def get_macd(symbol):
     """Calculate MACD indicator"""
-    if len(prices) < slow:
-        return None, None, None
-    
-    # Calculate EMAs
-    ema_fast = calculate_ema(prices, fast)
-    ema_slow = calculate_ema(prices, slow)
-    
-    # Calculate MACD line
-    macd_line = ema_fast - ema_slow
-    
-    # For signal line, we need to calculate MACD for each day
-    # This is a simplified version - in practice you'd need the full MACD history
-    if len(prices) >= slow + signal:
-        # Calculate MACD values for signal line
-        macd_values = []
-        for i in range(slow, len(prices)):
-            ema_fast_i = calculate_ema(prices[:i+1], fast)
-            ema_slow_i = calculate_ema(prices[:i+1], slow)
-            macd_values.append(ema_fast_i - ema_slow_i)
+    try:
+        days_back = request.args.get('days_back', 30)
+        fast = request.args.get('fast', 12)
+        slow = request.args.get('slow', 26)
+        signal = request.args.get('signal', 9)
         
-        if len(macd_values) >= signal:
-            signal_line = calculate_ema(macd_values, signal)
-            histogram = macd_line - signal_line
-            return round(macd_line, 2), round(signal_line, 2), round(histogram, 2)
-    
-    # Fallback: simple calculation
-    signal_line = macd_line * 0.8  # Simplified signal line
-    histogram = macd_line - signal_line
-    return round(macd_line, 2), round(signal_line, 2), round(histogram, 2)
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=int(days_back))
+        
+        url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/day/{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}?adjusted=true&sort=asc&limit=1000&apiKey={POLYGON_API_KEY}"
+        
+        response = requests.get(url, timeout=15)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('results'):
+                prices = [result['c'] for result in data['results']]
+                macd_line, signal_line, histogram = calculate_macd(prices, int(fast), int(slow), int(signal))
+                return jsonify({
+                    "symbol": symbol, 
+                    "macd_line": macd_line, 
+                    "signal_line": signal_line, 
+                    "histogram": histogram,
+                    "fast": fast,
+                    "slow": slow,
+                    "signal": signal
+                })
+            else:
+                return jsonify({"error": "No data found"}), 404
+        else:
+            return jsonify({"error": f"Polygon API error: {response.status_code}"}), 500
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/vwap/<symbol>', methods=['GET'])
 def get_vwap(symbol):
@@ -288,13 +337,24 @@ def calculate_macd(prices, fast=12, slow=26, signal=9):
     # Calculate MACD line
     macd_line = ema_fast - ema_slow
     
-    # Calculate signal line (EMA of MACD)
-    macd_values = [macd_line]  # Simplified - would need full MACD history
-    signal_line = calculate_ema(macd_values, signal)
+    # For signal line, we need to calculate MACD for each day
+    # This is a simplified version - in practice you'd need the full MACD history
+    if len(prices) >= slow + signal:
+        # Calculate MACD values for signal line
+        macd_values = []
+        for i in range(slow, len(prices)):
+            ema_fast_i = calculate_ema(prices[:i+1], fast)
+            ema_slow_i = calculate_ema(prices[:i+1], slow)
+            macd_values.append(ema_fast_i - ema_slow_i)
+        
+        if len(macd_values) >= signal:
+            signal_line = calculate_ema(macd_values, signal)
+            histogram = macd_line - signal_line
+            return round(macd_line, 2), round(signal_line, 2), round(histogram, 2)
     
-    # Calculate histogram
+    # Fallback: simple calculation
+    signal_line = macd_line * 0.8  # Simplified signal line
     histogram = macd_line - signal_line
-    
     return round(macd_line, 2), round(signal_line, 2), round(histogram, 2)
 
 def calculate_ema(prices, period):
